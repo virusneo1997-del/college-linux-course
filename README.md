@@ -48,6 +48,10 @@
 
 ```bash sudo apt-get install python3.(номер версии 10, 11 и т.п.) ```
 
+В случае предупреждения отсутствия зависимостей Python Core и win32api - выписывать в терминал
+
+```bash pip install pywin32 ```
+
 3. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
 
 ### Первые шаги
