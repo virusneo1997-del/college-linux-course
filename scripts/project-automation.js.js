@@ -1,6 +1,6 @@
 const automateProjectBoard = async ({ github, context }) => {
   // Конфигурация - замени эти значения!
-  const PROJECT_NUMBER = 1; // Номер твоего проекта (из URL)
+  const PROJECT_NUMBER = 4; // Номер твоего проекта (из URL)
   const ORGANIZATION = 'virusneo1997-del'; // Твой GitHub username
 
   console.log('🚀 Запуск автоматизации Project Board...');

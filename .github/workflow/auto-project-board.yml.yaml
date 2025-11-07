@@ -7,7 +7,7 @@ on:
     types: [submitted]
 
 env:
-  PROJECT_NUMBER: 1  # Замени на номер твоего проекта (смотри в URL)
+  PROJECT_NUMBER: 4 # Замени на номер твоего проекта (смотри в URL)
   ORGANIZATION: virusneo1997-del  # Твой username
 
 jobs:
