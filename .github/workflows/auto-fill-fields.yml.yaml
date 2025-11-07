@@ -18,7 +18,7 @@ jobs:
             // Этот скрипт будет автоматически заполнять поля при создании карточки студента
             const issue = context.payload.issue;
             const studentData = {
-              'ivanov1999': { group: 'ИТ-21', fullName: 'Иванов Иван' },
+              'kotikme': { group: '18ИПо8283', fullName: 'Суманюк Владимир' },
               'petrov2000': { group: 'ИТ-21', fullName: 'Петров Петр' },
               'sidorova1999': { group: 'ИТ-22', fullName: 'Сидорова Анна' }
               // Добавь данные всех своих студентов
