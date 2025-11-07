@@ -1,0 +1,22 @@
+name: 🚀 Автоматизация Project Board
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+  pull_request_review:
+    types: [submitted]
+
+env:
+  PROJECT_NUMBER: 1  # Замени на номер твоего проекта (смотри в URL)
+  ORGANIZATION: virusneo1997-del  # Твой username
+
+jobs:
+  automate-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🎯 Автоматическое обновление карточек
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { automateProjectBoard } = require('./.github/scripts/project-automation.js')
+            await automateProjectBoard({ github, context })

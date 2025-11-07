@@ -1,0 +1,31 @@
+name: 🤖 Автоматическое заполнение полей студентов
+
+on:
+  issues:
+    types: [opened]
+  project_card:
+    types: [created]
+
+jobs:
+  auto-fill-student-fields:
+    runs-on: ubuntu-latest
+    if: contains(github.event.issue.labels.*.name, 'student')
+    steps:
+      - name: 🔍 Анализ информации о студенте
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Этот скрипт будет автоматически заполнять поля при создании карточки студента
+            const issue = context.payload.issue;
+            const studentData = {
+              'ivanov1999': { group: 'ИТ-21', fullName: 'Иванов Иван' },
+              'petrov2000': { group: 'ИТ-21', fullName: 'Петров Петр' },
+              'sidorova1999': { group: 'ИТ-22', fullName: 'Сидорова Анна' }
+              // Добавь данные всех своих студентов
+            };
+            
+            const author = issue.user.login;
+            if (studentData[author]) {
+              console.log(`Найден студент: ${studentData[author].fullName}`);
+              // Здесь будет код для автоматического заполнения полей
+            }
