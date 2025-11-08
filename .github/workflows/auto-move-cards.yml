@@ -4,6 +4,11 @@ on:
   pull_request:
     types: [opened, ready_for_review, closed]
 
+permissions:
+  contents: read
+  pull-requests: write
+  repository-projects: write
+
 jobs:
   move-project-card:
     runs-on: ubuntu-latest
@@ -12,9 +17,345 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            // Этот скрипт будет автоматически перемещать карточки
-            // когда студенты создают Pull Requests
-            console.log('Автоматизация карточек для PR:', context.payload.pull_request.number);
-            
-            // Здесь будет код для автоматического перемещения
-            // Нужно настроить после тестирования ручного процесса
+            const automateProjectCard = async ({ github, context }) => {
+              // Конфигурация - замени эти значения!
+              const PROJECT_NUMBER = 4; // Номер твоего проекта
+              const OWNER = 'virusneo1997-del'; // Твой username
+              const IS_ORGANIZATION = false; // false для пользовательского проекта
+
+              console.log('🚀 Автоматизация карточек для PR:', context.payload.pull_request?.number);
+              console.log(`Событие: ${context.eventName}, Действие: ${context.payload.action}`);
+              console.log(`Автор PR: ${context.payload.pull_request?.user?.login}`);
+
+              try {
+                // 1. Получаем ID проекта
+                const projectId = await getProjectId(github, OWNER, PROJECT_NUMBER, IS_ORGANIZATION);
+                if (!projectId) {
+                  console.log('❌ Проект не найден');
+                  return;
+                }
+                console.log(`✅ ID проекта: ${projectId}`);
+
+                // 2. Получаем информацию о поле Status
+                const statusField = await getStatusField(github, projectId);
+                if (!statusField) {
+                  console.log('❌ Поле Status не найдено');
+                  return;
+                }
+                console.log(`✅ Поле Status найдено. Доступные статусы: ${statusField.options.map(opt => opt.name).join(', ')}`);
+
+                // 3. Определяем автора PR
+                const author = context.payload.pull_request?.user?.login;
+                if (!author) {
+                  console.log('❌ Не удалось определить автора PR');
+                  return;
+                }
+                console.log(`✅ Автор PR: ${author}`);
+
+                // 4. Находим карточку студента
+                const studentCard = await findStudentCard(github, projectId, author);
+                if (!studentCard) {
+                  console.log(`❌ Карточка для студента ${author} не найдена`);
+                  // Попробуем найти по полю "GitHub" или "Username"
+                  const alternativeCard = await findStudentCardAlternative(github, projectId, author);
+                  if (!alternativeCard) {
+                    console.log(`❌ Карточка не найдена даже по альтернативным полям`);
+                    return;
+                  }
+                  console.log(`✅ Карточка найдена по альтернативному полю`);
+                }
+                const card = studentCard || alternativeCard;
+                console.log(`✅ Карточка студента найдена, ID: ${card.id}`);
+
+                // 5. Определяем новый статус на основе события PR
+                const newStatus = determineNewStatus(context);
+                if (!newStatus) {
+                  console.log('❌ Не удалось определить новый статус');
+                  return;
+                }
+                console.log(`✅ Новый статус: ${newStatus}`);
+
+                // 6. Находим ID опции статуса
+                const statusOptionId = findStatusOptionId(statusField, newStatus);
+                if (!statusOptionId) {
+                  console.log(`❌ Опция статуса "${newStatus}" не найдена`);
+                  return;
+                }
+                console.log(`✅ ID опции статуса: ${statusOptionId}`);
+
+                // 7. Обновляем статус карточки
+                await updateCardStatus(github, projectId, card.id, statusField.id, statusOptionId);
+                
+                console.log(`🎉 Карточка студента ${author} перемещена в статус: ${newStatus}`);
+
+              } catch (error) {
+                console.error('💥 Ошибка автоматизации:', error);
+                console.error('Детали ошибки:', error.message);
+              }
+            };
+
+            // Функция получения ID проекта
+            async function getProjectId(github, owner, projectNumber, isOrganization = false) {
+              const entityType = isOrganization ? 'organization' : 'user';
+              
+              const query = `
+                query {
+                  ${entityType}(login: "${owner}") {
+                    projectV2(number: ${projectNumber}) {
+                      id
+                      title
+                    }
+                  }
+                }
+              `;
+              
+              console.log(`🔍 Поиск проекта: ${entityType}="${owner}", номер=${projectNumber}`);
+              
+              try {
+                const result = await github.graphql(query);
+                const project = result[entityType]?.projectV2;
+                if (project) {
+                  console.log(`✅ Найден проект: "${project.title}"`);
+                }
+                return project?.id;
+              } catch (error) {
+                console.error(`❌ Ошибка при поиске проекта: ${error.message}`);
+                throw error;
+              }
+            }
+
+            // Функция получения поля Status
+            async function getStatusField(github, projectId) {
+              const query = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const result = await github.graphql(query);
+                const fields = result.node.fields.nodes;
+                const statusField = fields.find(field => field.name === 'Status');
+                return statusField;
+              } catch (error) {
+                console.error(`❌ Ошибка при получении полей: ${error.message}`);
+                throw error;
+              }
+            }
+
+            // Основная функция поиска карточки студента
+            async function findStudentCard(github, projectId, studentGitHub) {
+              const query = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      items(first: 100) {
+                        nodes {
+                          id
+                          fieldValues(first: 10) {
+                            nodes {
+                              ... on ProjectV2ItemFieldTextValue {
+                                field {
+                                  ... on ProjectV2FieldCommon {
+                                    name
+                                  }
+                                }
+                                text
+                              }
+                              ... on ProjectV2ItemFieldSingleSelectValue {
+                                field {
+                                  ... on ProjectV2FieldCommon {
+                                    name
+                                  }
+                                }
+                                name
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const result = await github.graphql(query);
+                const items = result.node.items.nodes;
+                
+                const studentCard = items.find(item => {
+                  const githubField = item.fieldValues.nodes.find(f => 
+                    f.field?.name === 'Student GitHub' && f.text === studentGitHub
+                  );
+                  return githubField;
+                });
+
+                return studentCard;
+              } catch (error) {
+                console.error(`❌ Ошибка при поиске карточки: ${error.message}`);
+                throw error;
+              }
+            }
+
+            // Альтернативная функция поиска (если поле называется по-другому)
+            async function findStudentCardAlternative(github, projectId, studentGitHub) {
+              const query = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      items(first: 100) {
+                        nodes {
+                          id
+                          fieldValues(first: 10) {
+                            nodes {
+                              ... on ProjectV2ItemFieldTextValue {
+                                field {
+                                  ... on ProjectV2FieldCommon {
+                                    name
+                                  }
+                                }
+                                text
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const result = await github.graphql(query);
+                const items = result.node.items.nodes;
+                
+                // Ищем по разным возможным названиям полей
+                const possibleFields = ['GitHub', 'Username', 'Login', 'Student', 'GitHub Username'];
+                
+                for (let item of items) {
+                  for (let fieldName of possibleFields) {
+                    const field = item.fieldValues.nodes.find(f => 
+                      f.field?.name === fieldName && f.text && f.text.toLowerCase() === studentGitHub.toLowerCase()
+                    );
+                    if (field) {
+                      console.log(`✅ Карточка найдена по полю "${fieldName}"`);
+                      return item;
+                    }
+                  }
+                  
+                  // Также проверяем любой текстовый field, который содержит GitHub username
+                  const anyField = item.fieldValues.nodes.find(f => 
+                    f.text && f.text.toLowerCase() === studentGitHub.toLowerCase()
+                  );
+                  if (anyField) {
+                    console.log(`✅ Карточка найдена по полю "${anyField.field?.name}"`);
+                    return item;
+                  }
+                }
+                
+                return null;
+              } catch (error) {
+                console.error(`❌ Ошибка при альтернативном поиске: ${error.message}`);
+                return null;
+              }
+            }
+
+            // Функция определения нового статуса на основе событий PR
+            function determineNewStatus(context) {
+              const event = context.eventName;
+              const action = context.payload.action;
+              const pr = context.payload.pull_request;
+
+              console.log(`🔍 Определение статуса: event=${event}, action=${action}, merged=${pr?.merged}`);
+
+              if (event === 'pull_request') {
+                switch (action) {
+                  case 'opened':
+                    return 'In process'; // PR создан - перемещаем в "In process"
+                  case 'ready_for_review':
+                    return 'In review'; // PR готов к ревью - перемещаем в "In review"
+                  case 'closed':
+                    if (pr?.merged) {
+                      return 'Done'; // PR вмержен - перемещаем в "Done"
+                    } else {
+                      return 'To do'; // PR закрыт без мержа - возвращаем в "To do"
+                    }
+                }
+              }
+
+              console.log(`ℹ️ Статус не изменен для event=${event}, action=${action}`);
+              return null;
+            }
+
+            // Функция поиска ID опции статуса
+            function findStatusOptionId(statusField, statusName) {
+              if (!statusField || !statusField.options) {
+                console.log('❌ Поле Status не имеет опций');
+                return null;
+              }
+
+              // Ищем точное совпадение
+              let option = statusField.options.find(opt => opt.name === statusName);
+              
+              // Если не нашли, ищем похожие варианты
+              if (!option) {
+                const similarOptions = statusField.options.filter(opt => 
+                  opt.name.toLowerCase().includes(statusName.toLowerCase()) ||
+                  statusName.toLowerCase().includes(opt.name.toLowerCase())
+                );
+                if (similarOptions.length > 0) {
+                  option = similarOptions[0];
+                  console.log(`🔍 Используем похожий статус: "${option.name}" вместо "${statusName}"`);
+                }
+              }
+
+              return option?.id;
+            }
+
+            // Функция обновления статуса карточки
+            async function updateCardStatus(github, projectId, itemId, fieldId, optionId) {
+              const mutation = `
+                mutation {
+                  updateProjectV2ItemFieldValue(
+                    input: {
+                      projectId: "${projectId}"
+                      itemId: "${itemId}"
+                      fieldId: "${fieldId}"
+                      value: {
+                        singleSelectOptionId: "${optionId}"
+                      }
+                    }
+                  ) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                await github.graphql(mutation);
+                console.log('✅ Статус карточки успешно обновлен');
+              } catch (error) {
+                console.error(`❌ Ошибка при обновлении статуса: ${error.message}`);
+                throw error;
+              }
+            }
+
+            // Запуск основной функции
+            await automateProjectCard({ github, context });
