@@ -18,10 +18,10 @@ jobs:
         with:
           script: |
             const automateProjectCard = async ({ github, context }) => {
-              // Конфигурация - замени эти значения!
-              const PROJECT_NUMBER = 4; // Номер твоего проекта
-              const OWNER = 'virusneo1997-del'; // Твой username
-              const IS_ORGANIZATION = false; // false для пользовательского проекта
+              // Конфигурация
+              const PROJECT_NUMBER = 4;
+              const OWNER = 'virusneo1997-del';
+              const IS_ORGANIZATION = false;
 
               console.log('🚀 Автоматизация карточек для PR:', context.payload.pull_request?.number);
               console.log(`Событие: ${context.eventName}, Действие: ${context.payload.action}`);
@@ -189,6 +189,13 @@ jobs:
 
               console.log(`🔍 Определение статуса: event=${event}, action=${action}`);
               console.log(`🔍 PR merged: ${pr?.merged}, state: ${pr?.state}`);
+              console.log(`🔍 PR details:`, {
+                number: pr?.number,
+                title: pr?.title,
+                merged: pr?.merged,
+                state: pr?.state,
+                merged_at: pr?.merged_at
+              });
 
               if (event === 'pull_request') {
                 switch (action) {
@@ -201,12 +208,12 @@ jobs:
                     return 'In review';
                   
                   case 'closed':
-                    // ВАЖНО: проверяем именно свойство merged
+                    // ТОЧНАЯ ПРОВЕРКА НА MERGE
                     if (pr && pr.merged === true) {
-                      console.log('✅ PR вмержен → перемещаем в "Done"');
+                      console.log('✅ PR ВМЕРЖЕН → перемещаем в "Done"');
                       return 'Done';
                     } else {
-                      console.log('❌ PR закрыт без мержа → возвращаем в "To do"');
+                      console.log('❌ PR ЗАКРЫТ БЕЗ МЕРЖА → возвращаем в "To do"');
                       return 'To do';
                     }
                   
