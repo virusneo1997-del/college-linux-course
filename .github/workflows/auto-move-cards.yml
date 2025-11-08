@@ -2,7 +2,7 @@ name: 🚀 Автоматическое перемещение карточек
 
 on:
   pull_request:
-    types: [opened, ready_for_review, closed]
+    types: [opened, ready_for_review, closed, reopened]
 
 permissions:
   contents: read
@@ -57,7 +57,7 @@ jobs:
                 }
 
                 // 5. Определяем новый статус на основе события PR
-                const newStatus = determineNewStatus(context);
+                const newStatus = await determineNewStatus(github, context, projectId, studentCard.id, statusField);
                 if (!newStatus) {
                   console.log('ℹ️ Статус не требует изменения');
                   return;
@@ -181,21 +181,41 @@ jobs:
               }
             }
 
+            // Функция получения текущего статуса карточки
+            async function getCurrentStatus(github, projectId, itemId, statusField) {
+              const query = `
+                query {
+                  node(id: "${projectId}") {
+                    ... on ProjectV2 {
+                      item(id: "${itemId}") {
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const result = await github.graphql(query);
+                return result.node.item.fieldValueByName?.name;
+              } catch (error) {
+                console.error(`❌ Ошибка при получении текущего статуса: ${error.message}`);
+                return null;
+              }
+            }
+
             // ИСПРАВЛЕННАЯ Функция определения нового статуса
-            function determineNewStatus(context) {
+            async function determineNewStatus(github, context, projectId, itemId, statusField) {
               const event = context.eventName;
               const action = context.payload.action;
               const pr = context.payload.pull_request;
 
               console.log(`🔍 Определение статуса: event=${event}, action=${action}`);
               console.log(`🔍 PR merged: ${pr?.merged}, state: ${pr?.state}`);
-              console.log(`🔍 PR details:`, {
-                number: pr?.number,
-                title: pr?.title,
-                merged: pr?.merged,
-                state: pr?.state,
-                merged_at: pr?.merged_at
-              });
 
               if (event === 'pull_request') {
                 switch (action) {
@@ -203,18 +223,27 @@ jobs:
                     console.log('📝 PR открыт → перемещаем в "In process"');
                     return 'In process';
                   
+                  case 'reopened':
+                    console.log('🔄 PR переоткрыт → перемещаем в "In process"');
+                    return 'In process';
+                  
                   case 'ready_for_review':
                     console.log('👀 PR готов к ревью → перемещаем в "In review"');
                     return 'In review';
                   
                   case 'closed':
-                    // ТОЧНАЯ ПРОВЕРКА НА MERGE
-                    if (pr && pr.merged === true) {
+                    // ВАЖНО: проверка на мерж
+                    const isMerged = pr && pr.merged === true;
+                    console.log(`🔍 Проверка мержа: merged=${pr?.merged}, merged_at=${pr?.merged_at}`);
+                    
+                    if (isMerged) {
                       console.log('✅ PR ВМЕРЖЕН → перемещаем в "Done"');
                       return 'Done';
                     } else {
-                      console.log('❌ PR ЗАКРЫТ БЕЗ МЕРЖА → возвращаем в "To do"');
-                      return 'To do';
+                      // Получаем текущий статус карточки и оставляем его
+                      const currentStatus = await getCurrentStatus(github, projectId, itemId, statusField);
+                      console.log(`💤 PR закрыт без мержа → оставляем в текущем статусе: "${currentStatus}"`);
+                      return null; // Не меняем статус
                     }
                   
                   default:
@@ -230,7 +259,22 @@ jobs:
             // Функция поиска ID опции статуса
             function findStatusOptionId(statusField, statusName) {
               if (!statusField?.options) return null;
-              const option = statusField.options.find(opt => opt.name === statusName);
+              
+              // Ищем точное совпадение
+              let option = statusField.options.find(opt => opt.name === statusName);
+              
+              // Если не нашли, ищем похожие (на случай опечаток)
+              if (!option) {
+                const similarOptions = statusField.options.filter(opt => 
+                  opt.name.toLowerCase().includes(statusName.toLowerCase()) ||
+                  statusName.toLowerCase().includes(opt.name.toLowerCase())
+                );
+                if (similarOptions.length > 0) {
+                  option = similarOptions[0];
+                  console.log(`🔍 Используем похожий статус: "${option.name}" вместо "${statusName}"`);
+                }
+              }
+              
               return option?.id;
             }
 
