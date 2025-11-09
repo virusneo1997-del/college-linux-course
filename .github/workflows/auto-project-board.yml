@@ -13,6 +13,11 @@ env:
 jobs:
   automate-project:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      repository-projects: write
     steps:
       - name: 🎯 Автоматическое обновление карточек
         uses: actions/github-script@v6
@@ -38,7 +43,13 @@ jobs:
               
               const debugResult = await github.graphql(debugQuery);
               const projects = debugResult.user.projectsV2.nodes;
-              console.log('📋 Доступные проекты:', projects);
+              console.log('📋 Доступные проекты:', JSON.stringify(projects, null, 2));
+              
+              if (projects.length === 0) {
+                console.log('❌ У пользователя нет проектов!');
+                console.log('💡 Создайте Project Board вручную или проверьте USER_LOGIN');
+                return;
+              }
               
               const targetProject = projects.find(p => p.number === parseInt(process.env.PROJECT_NUMBER));
               if (!targetProject) {
@@ -47,10 +58,16 @@ jobs:
                 projects.forEach(project => {
                   console.log(`- Номер: ${project.number}, Название: "${project.title}"`);
                 });
-                return;
+                console.log('🔄 Пробуем использовать первый доступный проект...');
+                // Используем первый проект как запасной вариант
+                const fallbackProject = projects[0];
+                console.log(`🔄 Используем проект: "${fallbackProject.title}" (номер: ${fallbackProject.number})`);
+                
+                // Переопределяем номер проекта для использования в дальнейшем
+                process.env.PROJECT_NUMBER = fallbackProject.number;
+              } else {
+                console.log(`✅ Целевой проект найден: "${targetProject.title}" (номер: ${targetProject.number})`);
               }
-              
-              console.log(`✅ Целевой проект найден: "${targetProject.title}" (номер: ${targetProject.number})`);
               
             } catch (error) {
               console.error('💥 Ошибка при поиске проектов:', error.message);
@@ -158,6 +175,8 @@ jobs:
                   }
                 }
               }`;
+              
+              console.log(`🔍 Ищем проект: пользователь=${process.env.USER_LOGIN}, номер=${process.env.PROJECT_NUMBER}`);
               
               const projectResult = await github.graphql(projectQuery, {
                 user: process.env.USER_LOGIN,
@@ -277,10 +296,9 @@ jobs:
               console.log(`✅ УСПЕХ: Карточка студента ${author} перемещена в статус: ${newStatus}`);
               
             } catch (error) {
-              console.error('💥 ОШИБКА при обновлении карточки:', error);
-              console.log('🔧 Детали ошибки:', error.message);
+              console.error('💥 ОШИБКА при обновлении карточки:', error.message);
               if (error.errors) {
-                console.log('📋 GraphQL ошибки:', error.errors);
+                console.log('📋 GraphQL ошибки:', JSON.stringify(error.errors, null, 2));
               }
             }
             
