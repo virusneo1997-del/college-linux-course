@@ -1,191 +1,270 @@
-name: 🚀 Автоматизация Project Board (Classic)
+name: 🚀 Автоматизация Project Board
 
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, closed, converted_to_draft]
-  pull_request_review:
-    types: [submitted]
+
+env:
+  USER_LOGIN: "virusneo1997-del"
 
 jobs:
   automate-project:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      repository-projects: write
     steps:
-      - name: 🎯 Обновление статуса в проекте
+      - name: 🎯 Автоматическое обновление карточек
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            console.log('=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ (Classic Projects) ===');
+            console.log('=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ ===');
             
-            const { pull_request } = context.payload;
-            if (!pull_request) {
-              console.log('❌ Нет информации о PR');
-              return;
-            }
-            
-            const author = pull_request.user.login;
-            const prNumber = pull_request.number;
-            const prAction = context.payload.action;
-            const prState = pull_request.state;
-            const prMerged = pull_request.merged;
-            const prTitle = pull_request.title;
-            const prDraft = pull_request.draft;
-            
-            console.log(`👤 Автор PR: ${author}`);
-            console.log(`🔢 Номер PR: ${prNumber}`);
-            console.log(`🔧 Действие: ${prAction}`);
-            console.log(`📝 Заголовок: ${prTitle}`);
-            console.log(`🔄 Статус PR: ${prState}`);
-            console.log(`✅ Мерж: ${prMerged}`);
-            console.log(`📝 Черновик: ${prDraft}`);
-            
-            // ОПРЕДЕЛЯЕМ ЦЕЛЕВУЮ КОЛОНКУ
-            let targetColumn = null;
-            
-            if (context.eventName === 'pull_request') {
-              console.log(`🔄 Обрабатываем событие pull_request: ${prAction}`);
+            // 1. ОТЛАДКА - ПОКАЖЕМ ВСЕ ПРОЕКТЫ ПОЛЬЗОВАТЕЛЯ
+            try {
+              console.log('🔍 Ищем все проекты пользователя...');
+              const projectsQuery = `query {
+                user(login: "${process.env.USER_LOGIN}") {
+                  projectsV2(first: 10) {
+                    nodes {
+                      number
+                      title
+                      id
+                      url
+                    }
+                  }
+                }
+              }`;
+              
+              const projectsResult = await github.graphql(projectsQuery);
+              const projects = projectsResult.user.projectsV2.nodes;
+              
+              console.log('📋 ВСЕ ПРОЕКТЫ ПОЛЬЗОВАТЕЛЯ:');
+              projects.forEach((project, index) => {
+                console.log(`${index + 1}. "${project.title}"`);
+                console.log(`   Номер: ${project.number}`);
+                console.log(`   ID: ${project.id}`);
+                console.log(`   URL: ${project.url}`);
+                console.log(`   ---`);
+              });
+              
+              if (projects.length === 0) {
+                console.log('❌ У пользователя нет проектов!');
+                console.log('💡 Создайте Project Board:');
+                console.log('   1. Перейдите на https://github.com/users/virusneo1997-del/projects/');
+                console.log('   2. Нажмите "New project"');
+                console.log('   3. Выберите "Board" шаблон');
+                console.log('   4. Добавьте поле "Student GitHub" (Single text)');
+                console.log('   5. Добавьте карточки студентов');
+                return;
+              }
+              
+              // Используем первый проект
+              const targetProject = projects[0];
+              console.log(`🎯 ИСПОЛЬЗУЕМ ПРОЕКТ: "${targetProject.title}" (номер: ${targetProject.number})`);
+              
+              // Сохраняем ID проекта для дальнейшего использования
+              const projectId = targetProject.id;
+              
+              // 2. ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ PR
+              const { pull_request } = context.payload;
+              if (!pull_request) {
+                console.log('❌ Нет информации о PR');
+                return;
+              }
+              
+              const author = pull_request.user.login;
+              const prAction = context.payload.action;
+              const prState = pull_request.state;
+              const prMerged = pull_request.merged;
+              const prTitle = pull_request.title;
+              const prDraft = pull_request.draft;
+              
+              console.log(`👤 Автор PR: ${author}`);
+              console.log(`🔧 Действие: ${prAction}`);
+              console.log(`📝 Заголовок: ${prTitle}`);
+              console.log(`🔄 Статус PR: ${prState}`);
+              console.log(`✅ Мерж: ${prMerged}`);
+              console.log(`📝 Черновик: ${prDraft}`);
+              
+              // ОПРЕДЕЛЯЕМ НОВЫЙ СТАТУС
+              let newStatus = null;
               
               switch (prAction) {
                 case 'opened':
-                  if (prDraft) {
-                    console.log('🎯 PR открыт как черновик - оставляем в To do');
-                    targetColumn = 'To do';
-                  } else {
-                    console.log('🎯 PR открыт - перемещаем в In Progress');
-                    targetColumn = 'In Progress';
-                  }
+                  newStatus = prDraft ? 'To do' : 'In Progress';
+                  console.log(`🎯 PR открыт - устанавливаем: ${newStatus}`);
                   break;
                   
                 case 'reopened':
-                  console.log('🎯 PR переоткрыт - перемещаем в In Progress');
-                  targetColumn = 'In Progress';
+                  newStatus = 'In Progress';
+                  console.log('🎯 PR переоткрыт - устанавливаем: In Progress');
                   break;
                   
                 case 'ready_for_review':
-                  console.log('🎯 PR готов к проверке - перемещаем в In Progress');
-                  targetColumn = 'In Progress';
+                  newStatus = 'In Review';
+                  console.log('🎯 PR готов к проверке - устанавливаем: In Review');
                   break;
                   
                 case 'converted_to_draft':
-                  console.log('🎯 PR переведен в черновик - перемещаем в To do');
-                  targetColumn = 'To do';
+                  newStatus = 'To do';
+                  console.log('🎯 PR в черновике - устанавливаем: To do');
                   break;
                   
                 case 'closed':
-                  if (prMerged) {
-                    console.log('🎯 PR мержен - перемещаем в Done');
-                    targetColumn = 'Done';
-                  } else {
-                    console.log('🎯 PR закрыт без мержа - перемещаем в To do');
-                    targetColumn = 'To do';
-                  }
+                  newStatus = prMerged ? 'Done' : 'To do';
+                  console.log(`🎯 PR закрыт - устанавливаем: ${newStatus}`);
                   break;
                   
                 default:
-                  console.log(`ℹ️ Неизвестное действие: ${prAction}`);
+                  console.log(`ℹ️ Необрабатываемое действие: ${prAction}`);
+                  return;
               }
-            }
-            
-            // Обработка событий ревью
-            if (context.eventName === 'pull_request_review') {
-              const reviewState = context.payload.review.state;
-              console.log(`🔄 Обрабатываем ревью: ${reviewState}`);
               
-              if (reviewState === 'approved') {
-                console.log('🎯 Ревью approved - перемещаем в Done');
-                targetColumn = 'Done';
-              } else if (reviewState === 'changes_requested') {
-                console.log('🎯 Ревью требует изменений - перемещаем в In Progress');
-                targetColumn = 'In Progress';
-              }
-            }
-            
-            if (!targetColumn) {
-              console.log('ℹ️ Колонка не изменилась для этого события');
-              return;
-            }
-            
-            console.log(`🎯 Целевая колонка: ${targetColumn}`);
-            
-            try {
-              // 1. ПОЛУЧАЕМ ВСЕ ПРОЕКТЫ РЕПОЗИТОРИЯ
-              const projects = await github.rest.projects.listForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-              });
-              
-              console.log(`📋 Найдено проектов: ${projects.data.length}`);
-              
-              if (projects.data.length === 0) {
-                console.log('❌ В репозитории нет проектов!');
-                console.log('💡 Создайте Classic Project вручную');
+              if (!newStatus) {
+                console.log('ℹ️ Статус не изменился');
                 return;
               }
               
-              // Используем первый проект (обычно он один)
-              const project = projects.data[0];
-              console.log(`📊 Работаем с проектом: "${project.name}" (ID: ${project.id})`);
-              
-              // 2. ПОЛУЧАЕМ КОЛОНКИ ПРОЕКТА
-              const columns = await github.rest.projects.listColumns({
-                project_id: project.id,
-              });
-              
-              console.log('📋 Колонки проекта:', columns.data.map(col => col.name));
-              
-              const targetColumnObj = columns.data.find(col => col.name === targetColumn);
-              if (!targetColumnObj) {
-                console.log(`❌ Колонка "${targetColumn}" не найдена`);
-                console.log('💡 Доступные колонки:', columns.data.map(col => col.name));
-                return;
-              }
-              
-              console.log(`📋 Найдена колонка: ${targetColumnObj.name} (ID: ${targetColumnObj.id})`);
-              
-              // 3. ИЩЕМ СУЩЕСТВУЮЩУЮ КАРТОЧКУ ДЛЯ ЭТОГО PR
-              let existingCard = null;
-              
-              for (const column of columns.data) {
-                const cards = await github.rest.projects.listCards({
-                  column_id: column.id,
-                });
-                
-                for (const card of cards.data) {
-                  if (card.content_url && card.content_url.includes(`/issues/${prNumber}`)) {
-                    existingCard = card;
-                    console.log(`📎 Найдена существующая карточка в колонке "${column.name}"`);
-                    break;
+              // 3. ПОЛУЧАЕМ ИНФОРМАЦИЮ О ПРОЕКТЕ
+              const projectDetailsQuery = `query GetProjectDetails($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    title
+                    fields(first: 10) {
+                      nodes {
+                        ... on ProjectV2Field {
+                          id
+                          name
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                    items(first: 20) {
+                      nodes {
+                        id
+                        fieldValues(first: 5) {
+                          nodes {
+                            ... on ProjectV2ItemFieldTextValue {
+                              field {
+                                ... on ProjectV2FieldCommon {
+                                  name
+                                }
+                              }
+                              text
+                            }
+                            ... on ProjectV2ItemFieldSingleSelectValue {
+                              field {
+                                ... on ProjectV2FieldCommon {
+                                  name
+                                }
+                              }
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
                   }
                 }
-                if (existingCard) break;
+              }`;
+              
+              const projectDetails = await github.graphql(projectDetailsQuery, { projectId });
+              const project = projectDetails.node;
+              
+              console.log(`📊 Проект: ${project.title}`);
+              
+              // 4. НАХОДИМ ПОЛЕ STATUS
+              const statusField = project.fields.nodes.find(field => 
+                field.name === 'Status' && field.options
+              );
+              
+              if (!statusField) {
+                console.log('❌ Поле Status не найдено или не имеет опций');
+                console.log('📋 Доступные поля:', project.fields.nodes.map(f => ({
+                  name: f.name,
+                  hasOptions: !!f.options
+                })));
+                return;
               }
               
-              // 4. СОЗДАЕМ ИЛИ ПЕРЕМЕЩАЕМ КАРТОЧКУ
-              if (existingCard) {
-                // Перемещаем существующую карточку
-                console.log(`🔄 Перемещаем карточку в колонку: ${targetColumn}`);
-                await github.rest.projects.moveCard({
-                  card_id: existingCard.id,
-                  position: 'bottom',
-                  column_id: targetColumnObj.id,
-                });
-                console.log(`✅ Карточка перемещена в: ${targetColumn}`);
-              } else {
-                // Создаем новую карточку
-                console.log(`🔄 Создаем новую карточку в колонке: ${targetColumn}`);
-                await github.rest.projects.createCard({
-                  column_id: targetColumnObj.id,
-                  content_id: pull_request.id,
-                  content_type: 'PullRequest',
-                });
-                console.log(`✅ Новая карточка создана в: ${targetColumn}`);
+              console.log(`📋 Поле Status: ${statusField.id}`);
+              console.log('📋 Доступные статусы:', statusField.options.map(o => o.name));
+              
+              // 5. НАХОДИМ ОПЦИЮ СТАТУСА
+              const statusOption = statusField.options.find(option => option.name === newStatus);
+              if (!statusOption) {
+                console.log(`❌ Опция "${newStatus}" не найдена в поле Status`);
+                return;
               }
               
-              console.log(`🎉 УСПЕХ: PR #${prNumber} автора ${author} обработан!`);
+              console.log(`📋 Опция статуса: ${statusOption.name} (ID: ${statusOption.id})`);
+              
+              // 6. ИЩЕМ КАРТОЧКУ СТУДЕНТА
+              console.log(`🔍 Ищем карточку для: ${author}`);
+              console.log(`📊 Всего карточек: ${project.items.nodes.length}`);
+              
+              const studentItem = project.items.nodes.find(item => {
+                const githubField = item.fieldValues.nodes.find(f => 
+                  f.field && f.field.name === 'Student GitHub' && f.text
+                );
+                return githubField && githubField.text === author;
+              });
+              
+              if (!studentItem) {
+                console.log(`❌ Карточка для ${author} не найдена`);
+                console.log('📋 Доступные студенты:');
+                project.items.nodes.forEach(item => {
+                  const githubField = item.fieldValues.nodes.find(f => 
+                    f.field && f.field.name === 'Student GitHub' && f.text
+                  );
+                  if (githubField) {
+                    const currentStatus = item.fieldValues.nodes.find(f => 
+                      f.field && f.field.name === 'Status' && f.name
+                    );
+                    console.log(`- ${githubField.text} (статус: ${currentStatus?.name || 'не установлен'})`);
+                  }
+                });
+                return;
+              }
+              
+              console.log(`📎 Найдена карточка: ${studentItem.id}`);
+              
+              // 7. ОБНОВЛЯЕМ СТАТУС
+              const updateMutation = `mutation UpdateStatus($input: UpdateProjectV2ItemFieldValueInput!) {
+                updateProjectV2ItemFieldValue(input: $input) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }`;
+              
+              await github.graphql(updateMutation, {
+                input: {
+                  projectId: projectId,
+                  itemId: studentItem.id,
+                  fieldId: statusField.id,
+                  value: { singleSelectOptionId: statusOption.id }
+                }
+              });
+              
+              console.log(`✅ УСПЕХ: ${author} перемещен в "${newStatus}"`);
               
             } catch (error) {
               console.error('💥 ОШИБКА:', error.message);
-              console.log('🔧 Детали ошибки:', JSON.stringify(error, null, 2));
+              if (error.errors) {
+                console.log('📋 GraphQL ошибки:', JSON.stringify(error.errors, null, 2));
+              }
             }
             
-            console.log('=== 🏁 ЗАВЕРШЕНИЕ АВТОМАТИЗАЦИИ ===');
+            console.log('=== 🏁 ЗАВЕРШЕНИЕ ===');
