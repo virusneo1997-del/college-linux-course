@@ -11,7 +11,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  projects: write
+  project: write
 
 jobs:
   sync-project:
