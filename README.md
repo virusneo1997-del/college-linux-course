@@ -84,7 +84,7 @@ git clone https://github.com/virusneo1997-del/college-linux-admin-course.git
 ## Полезная информация и справки
 
 - [Система контроля версий](https://github.com/kaldyrr/compendiums_for_my_students/tree/main/git_guide_plus)
-- [Ubuntu Server 22.04 LTS](https://documentation.ubuntu.com/server/) (возможно позже, будет гайд от Венсдей/Айгуль на подобии гайда по системе контроля версий)
+- [Ubuntu Server 22.04 LTS](https://documentation.ubuntu.com/server/) (возможно позже, будет гайд от Уэнсдей/Айгуль на подобии гайда по системе контроля версий)
 
 ## 📩 
 
