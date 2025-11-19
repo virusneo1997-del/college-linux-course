@@ -1,50 +1,58 @@
 #!/usr/bin/env python3
+"""
+Run tests for lessons changed in a PR.
 
+Usage:
+  python scripts/run_lesson_tests.py <base_sha> <head_sha>
+
+In GitHub Actions we'll pass:
+  ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }}
+"""
 import subprocess
 import sys
 from pathlib import Path
-import requests
 
-RAW_URLS = {
-    "01-initial-setup": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/01-initial-setup/README.md",
-    "02-users-permissions": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/02-users-permissions/README.md",
-    "03-web-server": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/03-web-server/README.md",
-    "04-monitoring": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/04-monitoring/README.md",
-    "05-databases-backups": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/05-databases-backups/README.md",
-    "06-docker-containers": "https://raw.githubusercontent.com/virusneo1997-del/college-linux-course/refs/heads/main/lessons/06-docker-containers/README.md",
-}
-
-def download_readme(lesson_name):
-    url = RAW_URLS.get(lesson_name)
-    if not url:
-        return None
-
-    resp = requests.get(url)
-    resp.raise_for_status()
-    folder = Path("tests") / lesson_name
-    folder.mkdir(parents=True, exist_ok=True)
-    readme_path = folder / "README.md"
-    readme_path.write_text(resp.text, encoding="utf-8")
-    return readme_path
-
-def run_pytest(lesson_name):
-    print(f"Running tests for lesson {lesson_name}")
-    res = subprocess.run(["pytest", "-q", str(Path("tests") / lesson_name)], check=False)
-    return res.returncode
+def get_changed_lessons(base, head):
+    # git diff base..head --name-only
+    res = subprocess.run(["git", "diff", "--name-only", f"{base}..{head}"], capture_output=True, text=True)
+    if res.returncode != 0:
+        print("git diff failed:", res.stderr)
+        return set()
+    files = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+    lessons = set()
+    for f in files:
+        parts = Path(f).parts
+        # look for 'lessons/<lesson-name>/...'
+        if len(parts) >= 2 and parts[0] == "lessons":
+            lessons.add(parts[1])
+    return lessons
 
 def main():
-    # Можно брать уроки из аргументов или просто запускать для всех
+    if len(sys.argv) != 3:
+        print("Usage: run_lesson_tests.py <base_sha> <head_sha>")
+        sys.exit(1)
+
+    base_sha = sys.argv[1]
+    head_sha = sys.argv[2]
+
+    lessons = get_changed_lessons(base_sha, head_sha)
+    if not lessons:
+        print("No changed lessons found between shas — nothing to test.")
+        sys.exit(0)
+
+    print("Changed lessons:", lessons)
     exit_code = 0
-    for lesson in RAW_URLS:
-        path = download_readme(lesson)
-        if path:
-            code = run_pytest(lesson)
-            if code != 0:
-                exit_code = code
+    for lesson in lessons:
+        test_dir = Path("tests") / lesson
+        if test_dir.exists():
+            print(f"Running pytest for {lesson} ...")
+            res = subprocess.run(["pytest", "-q", str(test_dir)], check=False)
+            if res.returncode != 0:
+                print(f"Tests failed for {lesson}")
+                exit_code = res.returncode
         else:
-            print(f"No README URL for {lesson}")
+            print(f"No tests directory for {lesson}, skipping")
     sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()
-
