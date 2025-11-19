@@ -1,0 +1,71 @@
+vboxuser@vboxuser: $ ip addr show
+1: 1o: <LOOPBACK, UP, LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default glen 1000
+link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+inet 127.0.0.1/8 scope host lo
+valid_ift forever preferred_ift forever
+inet6 ::1/128 scope host
+valid_lft forever preferred_lft forever
+2: enpos3: <BROADCAST, MULTICAST, UP, LOWER_UP> mtu 1500 gdisc fa_codel state
+link/ether 08:00:27:0d:c1:36 brd ff:ff:ff:ff:ff:ff
+inet 10.37.11.6/24 metric 100 brd 10.37.11.255 scope global dynamic enpos3
+valid_lft 85634sec preferred_lft 85634sec
+inet6 fe80::a00:27ff:fe0d:c136/64 scope link
+valid_lft forever preferred_lft forever
+
+
+
+vboxuser@vboxuser: $ sudo apt update
+[sudo]
+password for vboxuser:
+88
+sudo
+apt upgrade -y
+Hit:1 http://ru.archive.ubuntu.com/ubuntu jammyInRelease
+Hit :2
+Hit :3
+http://ru.archive.ubuntu.com/ubuntu jammy-updates InRelease http://ru.archive.ubuntu.com/ubuntu jammy-backports InRelease
+Hit: 4 http://ru.archive.ubuntu.com/ubuntu jammy-security InRelease
+Reading package
+lists... Done
+Bullding dependency tree... Done Reading state information...Done 8 packages can be upgraded. Run
+'apt list --upgradable' to see them.
+Reading package lists... Done Building dependency tree... Done Reading state information...
+Done
+Calculating upgrade...
+Done
+The following packages have been kept back:
+libnss-systemd libpam-systemd libsystemdo libudev1 systemd systemd-sysv systemd-timesyned udev o upgraded, o newly installed, o to remove and 8 not upgraded.
+
+
+Building dependency tree... Done
+Reading state information... Done
+htop is already the newest version (3.0.5-7build2).
+htop set to manually installed.
+cur1 is already the newest version (7.81.0-1ubuntu1.21).
+cur1 set to manually installed.
+git is already the newest version (1:2.34.1-1ubuntu1.15).
+git set to manually installed.
+get is already the newest version (1.21.2-2ubuntu1.1).
+get set to manually installed.
+The following NEW packages will be installed:
+tree
+o upgraded, 1 newly installed, o to remove and 8 not upgraded.
+Need to get 47.9 kB of archives.
+After this operation, 116 kB of additional disk space will be used.
+Get :1 http://ru.archive.ubuntu.com/ubuntu jammy/universe amd64
+Fetched 47.9 kB in Os (487 kB/s)
+Selecting previously unselected package tree.
+(Reading database ... 75576 files and directories currently installed.)
+Preparing to unpack .../tree_2.0.2-1_amd64.deb ...
+Unpacking tree (2.0.2-1)
+Setting up tree (2.0.2-1)
+Processing triggers for man-d (2.10.2-1) ...
+Scanning processes...
+Scanning candidates...
+Scanning linux images...
+Running kernel seems to be up-to-date.
+No services need to be restarted.
+No containers need to be restarted.
+No user sessions are running outdated binaries.
+No VM guests are running outdated hypervisor (gemu) binaries on this host.
+boxuser @boxuser:*$
