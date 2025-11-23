@@ -1,93 +1,155 @@
-name: Check student submission
+name: Check Student Submission
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
-  check-student:
+  update-project:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Extract PR info
-        id: pr
-        run: |
-          echo "BRANCH=${{ github.event.pull_request.head.ref }}" >> $GITHUB_ENV
-
-      - name: Checkout student's repository
-        uses: actions/checkout@v3
+      - name: Move PR to "In Progress"
+        if: github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened'
+        uses: actions/github-script@v6
         with:
-          fetch-depth: 0
-          ref: ${{ env.BRANCH }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const PROJECT_ID = "ВАШ_PROJECT_ID"; // вставь сюда!
 
-      - name: Determine lesson folder
-        id: lesson
-        run: |
-          # ищем любую папку lesson-xx
-          folder=$(find . -maxdepth 1 -type d -name "lesson-*")
-          if [ -z "$folder" ]; then
-            echo "❌ Не найдена папка урока (например: lesson-02)."
-            exit 1
-          fi
-          echo "LESSON=$folder" >> $GITHUB_ENV
-          echo "Найдена папка урока: $folder"
+            const item = await github.graphql(`
+              mutation($project: ID!, $pr: ID!) {
+                addProjectV2ItemById(input: {
+                  projectId: $project,
+                  contentId: $pr
+                }) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `, {
+              project: PROJECT_ID,
+              pr: context.payload.pull_request.node_id
+            });
 
-      - name: Validate student structure
-        run: |
-          REPORT="${{ env.LESSON }}/student-report.md"
-          if [ ! -f "$REPORT" ]; then
-            echo "❌ Файл student-report.md отсутствует."
-            exit 1
-          fi
-          echo "student-report.md найден"
+            const itemId = item.addProjectV2ItemById.item.id;
 
-      - name: Checkout teacher's course repository
-        uses: actions/checkout@v3
+            await github.graphql(`
+              mutation($project: ID!, $item: ID!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project,
+                  itemId: $item,
+                  fieldId: "Status",
+                  value: { singleSelectOptionId: "in_progress" }
+                }) {
+                  clientMutationId
+                }
+              }
+            `, {
+              project: PROJECT_ID,
+              item: itemId
+            });
+
+  move-to-review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.requested_reviewers
+    steps:
+      - name: Move PR to "In Review"
+        uses: actions/github-script@v6
         with:
-          repository: virusneo1997-del/college-linux-course
-          path: course
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const PROJECT_ID = "ВАШ_PROJECT_ID"; // вставь сюда
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+            const prNodeId = context.payload.pull_request.node_id;
+
+            const item = await github.graphql(`
+              query($project: ID!, $pr: ID!) {
+                node(id: $project) {
+                  ... on ProjectV2 {
+                    items(first: 100) {
+                      nodes {
+                        id
+                        content {
+                          ... on PullRequest {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { project: PROJECT_ID });
+
+            const found = item.node.items.nodes.find(i => i.content?.id === prNodeId);
+
+            if (!found) return;
+
+            await github.graphql(`
+              mutation($project: ID!, $item: ID!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project,
+                  itemId: $item,
+                  fieldId: "Status",
+                  value: { singleSelectOptionId: "in_review" }
+                }) {
+                  clientMutationId
+                }
+              }
+            `, {
+              project: PROJECT_ID,
+              item: found.id
+            });
+
+  move-to-done:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Move PR to Done
+        uses: actions/github-script@v6
         with:
-          python-version: "3.11"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const PROJECT_ID = "ВАШ_PROJECT_ID"; // вставь сюда
 
-      - name: Install dependencies
-        run: pip install -r course/requirements.txt
+            const prNodeId = context.payload.pull_request.node_id;
 
-      - name: Run automated tests for this lesson
-        run: |
-          echo "Запускаем тесты для ${{ env.LESSON }}"
-          python course/scripts/run_lesson_tests.py HEAD~1 HEAD
-        continue-on-error: true
-        id: tests
+            const item = await github.graphql(`
+              query($project: ID!, $pr: ID!) {
+                node(id: $project) {
+                  ... on ProjectV2 {
+                    items(first: 100) {
+                      nodes {
+                        id
+                        content {
+                          ... on PullRequest {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { project: PROJECT_ID });
 
-      - name: Add PR comment with test summary
-        if: always()
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          recreate: true
-          message: |
-            ## 🧪 Автоматическая проверка задания
+            const found = item.node.items.nodes.find(i => i.content?.id === prNodeId);
 
-            **Урок:** `${{ env.LESSON }}`  
-            **Статус:** ${{ steps.tests.outcome }}
+            if (!found) return;
 
-            Логи тестов:
-            ```
-            ${{ steps.tests.outputs.test-results }}
-            ```
-
-      - name: Fail job if tests failed
-        if: steps.tests.outcome != 'success'
-        run: |
-          echo "❌ Тесты не пройдены"
-          exit 1
-
-      - name: Success
-        run: echo "🎉 Все проверки пройдены!"
+            await github.graphql(`
+              mutation($project: ID!, $item: ID!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $project,
+                  itemId: $item,
+                  fieldId: "Status",
+                  value: { singleSelectOptionId: "done" }
+                }) {
+                  clientMutationId
+                }
+              }
+            `, {
+              project: PROJECT_ID,
+              item: found.id
+            });
