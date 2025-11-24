@@ -11,7 +11,7 @@ jobs:
       - name: Manage project card
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
+          github-token: ${{ secrets.CLI_token }}
           script: |
             const projectId = "PVT_kwHODlAJvM4BHrKr"; // ID твоего Project v2
             const fieldName = "Status"; // Имя поля в Project (должно быть именно так!)
