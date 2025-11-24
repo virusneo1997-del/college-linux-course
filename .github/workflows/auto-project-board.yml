@@ -7,22 +7,25 @@ on:
 jobs:
   manage-project:
     runs-on: ubuntu-latest
+
     steps:
       - name: Manage project card
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.CLI_token }}
+          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
-            const projectId = "PVT_kwHODlAJvM4BHrKr"; // ID твоего Project v2
-            const fieldName = "Status"; // Имя поля в Project (должно быть именно так!)
-            const pr = context.payload.pull_request;
-            if (!pr) throw new Error("❌ Это событие не связано с pull request.");
+            const projectId = "PVT_kwHODlAJvM4BHrKr"; // ID Project V2
+            const fieldName = "Status"; // Exact name of the Status field
 
-            // Определяем нужную колонку в зависимости от события
-            let fieldValue = null;
+            const pr = context.payload.pull_request;
+            if (!pr) throw new Error("❌ This event is not a pull request.");
+
             const action = context.payload.action;
             const merged = pr.merged;
             const hasReviewers = pr.requested_reviewers?.length > 0;
+
+            // Determine the column based on PR state
+            let fieldValue = null;
 
             if (action === "opened" || action === "reopened" || action === "synchronize") {
               fieldValue = "In Progress";
@@ -35,11 +38,11 @@ jobs:
             }
 
             if (!fieldValue) {
-              console.log("ℹ️ Ничего не меняем — событие не требует обновления Project.");
+              console.log("ℹ️ No update required.");
               return;
             }
 
-            // Получаем поля и их значения
+            // Fetch project fields
             const query = `
               query($projectId: ID!) {
                 node(id: $projectId) {
@@ -66,13 +69,15 @@ jobs:
             `;
             const result = await github.graphql(query, { projectId });
             const fields = result.node.fields.nodes;
-            const statusField = fields.find(f => f.name === fieldName);
-            if (!statusField) throw new Error(`Поле "${fieldName}" не найдено в Project.`);
-            const statusOption = statusField.options.find(o => o.name === fieldValue);
-            if (!statusOption) throw new Error(`Опция "${fieldValue}" не найдена.`);
 
-            // Добавляем PR в Project (если ещё нет)
-            const addItemResult = await github.graphql(`
+            const statusField = fields.find(f => f.name === fieldName);
+            if (!statusField) throw new Error(`❌ Field "${fieldName}" not found.`);
+
+            const statusOption = statusField.options.find(o => o.name === fieldValue);
+            if (!statusOption) throw new Error(`❌ Option "${fieldValue}" not found.`);
+
+            // Add item to project if not exists
+            const addItem = await github.graphql(`
               mutation($projectId: ID!, $contentId: ID!) {
                 addProjectV2ItemById(input: {
                   projectId: $projectId,
@@ -86,9 +91,9 @@ jobs:
               contentId: pr.node_id
             });
 
-            const itemId = addItemResult.addProjectV2ItemById.item.id;
+            const itemId = addItem.addProjectV2ItemById.item.id;
 
-            // Устанавливаем новое значение поля Status
+            // Update Status field
             await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
@@ -107,7 +112,7 @@ jobs:
               optionId: statusOption.id
             });
 
-            console.log(`✅ PR обновлён → колонка "${fieldValue}"`);
+            console.log(`✅ Updated PR → "${fieldValue}"`);
 
       - name: Comment on PR
         if: ${{ github.event.action != 'synchronize' }}
@@ -122,13 +127,13 @@ jobs:
             let message = null;
 
             if (action === "opened" || action === "reopened") {
-              message = "🚀 Pull Request добавлен в проект и помещён в колонку **In Progress**.";
+              message = "🚀 Pull Request added to project → **In Progress**.";
             } else if (action === "review_requested") {
-              message = "🧩 Запрошен обзор — PR перемещён в колонку **In review**.";
+              message = "🧩 Review requested → moved to **In review**.";
             } else if (action === "closed" && merged) {
-              message = "🎉 PR замержен — карточка перенесена в **Done**!";
+              message = "🎉 PR merged → moved to **Done**!";
             } else if (action === "closed" && !merged) {
-              message = "⚙️ PR закрыт без merge — карточка возвращена в **To do**.";
+              message = "⚙️ PR closed without merge → moved to **To do**.";
             }
 
             if (message) {
