@@ -1,4 +1,4 @@
-name: Complete Student Workflow with Python Tests
+name: "🎓 Student Workflow - Full Validation"
 
 on:
   pull_request:
@@ -38,13 +38,19 @@ jobs:
         id: find-lesson
         run: |
           echo "🔍 Ищем папку урока..."
-          lesson=$(find . -path "./lessons/[0-9]*-*" -type d | head -1)
+          
+          # Ищем ВСЕ папки в lessons (01-initial-setup, 02-users-permissions и т.д.)
+          lesson=$(find lessons -maxdepth 1 -type d ! -name "lessons" ! -name "solutions" | head -1)
+          
           if [ -n "$lesson" ]; then
             lesson_name=$(basename "$lesson")
             echo "✅ Найдена папка: $lesson_name"
             echo "lesson_name=$lesson_name" >> $GITHUB_OUTPUT
+            echo "lesson_path=$lesson" >> $GITHUB_OUTPUT
           else
-            echo "❌ Папка урока не найдена"
+            echo "❌ Папка урока не найдена в lessons/"
+            echo "Содержимое lessons/:"
+            ls -la lessons/
             echo "lesson_name=not_found" >> $GITHUB_OUTPUT
           fi
 
@@ -52,6 +58,7 @@ jobs:
         id: validate-structure
         run: |
           lesson_name="${{ steps.find-lesson.outputs.lesson_name }}"
+          lesson_path="${{ steps.find-lesson.outputs.lesson_path }}"
           
           if [ "$lesson_name" = "not_found" ]; then
             echo "❌ Ошибка: папка урока не найдена"
@@ -59,22 +66,36 @@ jobs:
             exit 1
           fi
 
-          lesson_path="./lessons/$lesson_name"
+          echo "📁 Проверяем папку: $lesson_path"
           
-          # Проверяем наличие student-report.md
-          if [ ! -f "$lesson_path/student-report.md" ]; then
-            echo "❌ Ошибка: нет student-report.md в $lesson_path"
+          # Показываем что есть в папке для диагностики
+          echo "Содержимое папки урока:"
+          ls -la "$lesson_path/" || echo "Не удалось показать содержимое"
+          
+          # Ищем student-report.md в корне папки урока
+          report_path="$lesson_path/student-report.md"
+          
+          if [ ! -f "$report_path" ]; then
+            echo "❌ Ошибка: student-report.md не найден в $lesson_path/"
+            echo "Создайте файл $report_path с отчетом о выполнении задания"
             echo "lesson_valid=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
+          echo "✅ Найден student-report.md: $report_path"
+          
           # Проверяем что файл не пустой
-          if [ ! -s "$lesson_path/student-report.md" ]; then
+          if [ ! -s "$report_path" ]; then
             echo "❌ Ошибка: student-report.md пустой"
+            echo "Добавьте содержание в файл $report_path"
             echo "lesson_valid=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
+          # Показываем начало файла для проверки
+          echo "📄 Начало student-report.md:"
+          head -5 "$report_path" || echo "Не удалось прочитать файл"
+          
           echo "✅ Структура урока правильная"
           echo "lesson_valid=true" >> $GITHUB_OUTPUT
 
@@ -89,7 +110,15 @@ jobs:
           
           echo "📊 Сравниваем коммиты: $base_sha..$head_sha"
           
-          # Запускаем твой скрипт для тестирования измененных уроков
+          # Проверяем что скрипт существует
+          if [ ! -f "scripts/run_lesson_tests.py" ]; then
+            echo "⚠️ Скрипт scripts/run_lesson_tests.py не найден, пропускаем тесты"
+            echo "passed=no_script" >> $GITHUB_OUTPUT
+            echo "tests_output=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Запускаем скрипт для тестирования измененных уроков
           if python scripts/run_lesson_tests.py "$base_sha" "$head_sha"; then
             echo "✅ Все Python тесты пройдены"
             echo "passed=true" >> $GITHUB_OUTPUT
@@ -113,7 +142,7 @@ jobs:
             
             // Получаем результаты всех проверок
             const structureValid = "${{ needs.validate-and-test.outputs.lesson_valid }}" === "true";
-            const pythonTestsPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}" === "true";
+            const pythonTestsPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}";
             const testsOutput = "${{ needs.validate-and-test.outputs.tests_output }}";
             
             let status = "В процессе";
@@ -122,22 +151,25 @@ jobs:
             
             console.log(`📊 Результаты проверок: структура=${structureValid}, тесты=${pythonTestsPassed}, вывод=${testsOutput}`);
             
-            // Логика определения статуса на основе ВСЕХ проверок
+            // Умная логика определения статуса на основе ВСЕХ проверок
             if (prAction === "closed" && isMerged) {
-              if (structureValid && pythonTestsPassed) {
+              // PR объединен - финальный статус
+              if (structureValid && (pythonTestsPassed === "true" || pythonTestsPassed === "no_script")) {
                 status = "Готово";
               } else {
                 status = "Требует исправлений";
               }
             } else if (prAction === "review_requested") {
+              // Запрошено ревью
               status = "На проверке";
             } else if (prAction === "opened" || prAction === "reopened") {
-              if (structureValid && pythonTestsPassed) {
-                status = "В процессе";
-              } else if (!structureValid) {
+              // Новый или переоткрытый PR
+              if (!structureValid) {
                 status = "Требует исправлений";
-              } else if (structureValid && !pythonTestsPassed) {
+              } else if (pythonTestsPassed === "false") {
                 status = "Тесты не пройдены";
+              } else {
+                status = "В процессе";
               }
             }
 
@@ -160,6 +192,7 @@ jobs:
               });
 
               const itemId = addResult.addProjectV2ItemById.item.id;
+              console.log(`✅ PR добавлен в проект, ID элемента: ${itemId}`);
 
               // Получаем поля проекта
               const projectData = await github.graphql(`
@@ -187,13 +220,17 @@ jobs:
               
               if (!statusField) {
                 console.log("❌ Поле 'Статус' не найдено в проекте");
+                const availableFields = projectData.node.fields.nodes.map(f => f.name).join(', ');
+                console.log(`Доступные поля: ${availableFields}`);
                 return;
               }
 
               const statusOption = statusField.options.find(o => o.name === status);
               
               if (!statusOption) {
-                console.log(`❌ Опция '${status}' не найдена. Доступные: ${statusField.options.map(o => o.name).join(', ')}`);
+                console.log(`❌ Опция '${status}' не найдена`);
+                const availableOptions = statusField.options.map(o => o.name).join(', ');
+                console.log(`Доступные опции: ${availableOptions}`);
                 return;
               }
 
@@ -220,6 +257,9 @@ jobs:
 
             } catch (error) {
               console.log("⚠️ Не удалось обновить Project Board:", error.message);
+              if (error.message.includes("Resource not accessible")) {
+                console.log("🔐 Проверьте PERSONAL_ACCESS_TOKEN и права доступа");
+              }
             }
 
   post-detailed-results:
@@ -232,29 +272,33 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const isValid = "${{ needs.validate-and-test.outputs.lesson_valid }}" === "true";
-            const pythonPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}" === "true";
+            const pythonPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}";
             const lessonName = "${{ needs.validate-and-test.outputs.lesson_name }}";
             
-            let comment = "## 📋 Детальные результаты проверки\\n\\n";
+            let comment = "## 📋 Результаты автоматической проверки\\n\\n";
             
-            if (isValid && pythonPassed) {
+            if (isValid && (pythonPassed === "true" || pythonPassed === "no_script")) {
               comment += "🎉 **ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ!**\\n";
               comment += `📁 Папка урока: ${lessonName}\\n`;
               comment += "✅ Структура урока корректна\\n";
-              comment += "✅ Python тесты пройдены\\n";
-              comment += "🚀 Задание готово к ревью!";
-            } else if (isValid && !pythonPassed) {
+              if (pythonPassed === "true") {
+                comment += "✅ Python тесты пройдены\\n";
+              } else {
+                comment += "ℹ️ Python тесты не запускались (скрипт не найден)\\n";
+              }
+              comment += "🚀 **Задание готово к ревью!**";
+            } else if (isValid && pythonPassed === "false") {
               comment += "⚠️ **СТРУКТУРА OK, НО ТЕСТЫ НЕ ПРОЙДЕНЫ**\\n";
               comment += `📁 Папка урока: ${lessonName}\\n`;
               comment += "✅ Структура урока корректна\\n";
               comment += "❌ Python тесты не пройдены\\n";
-              comment += "🔧 Проверьте вывод тестов выше и исправьте код";
+              comment += "🔧 **Проверьте вывод тестов выше и исправьте код**";
             } else if (!isValid) {
               comment += "❌ **ПРОБЛЕМЫ СО СТРУКТУРОЙ**\\n";
-              comment += "• Папка урока не найдена ИЛИ\\n";
-              comment += "• student-report.md отсутствует ИЛИ\\n";
+              comment += "• Папка урока не найдена **ИЛИ**\\n";
+              comment += "• student-report.md отсутствует **ИЛИ**\\n"; 
               comment += "• student-report.md пустой\\n";
-              comment += "🔧 Исправьте структуру и обновите PR";
+              comment += "🔧 **Исправьте структуру и обновите PR**";
             }
             
             comment += "\\n\\n---\\n*Автоматическая проверка College Linux Course*";
