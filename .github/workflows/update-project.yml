@@ -11,7 +11,7 @@ jobs:
       - name: Move PR in User Project
       uses: actions/github-script@v7
       with:
-        github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN_FINE }}
+        github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         script: |
           const projectOwner = "virusneo1997-del";  // user login
           const projectNumber = 1;                  // номер USER-проекта

@@ -13,9 +13,7 @@ jobs:
         with:
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           script: |
-            // ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ID ВАШЕГО ПРОЕКТА
             const projectId = "PVT_kwHODlAJvM4BHrKr"; 
-            
             const fieldName = "Статус";
             const pr = context.payload.pull_request;
             
@@ -46,7 +44,7 @@ jobs:
             }
 
             try {
-              // Проверяем доступ к проекту
+              // Проверяем доступ к проекту - ИСПРАВЛЕННЫЙ ЗАПРОС
               const projectQuery = `
                 query ($projectId: ID!) {
                   node(id: $projectId) {
