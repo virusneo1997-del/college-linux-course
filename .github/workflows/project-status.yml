@@ -2,106 +2,173 @@ name: Update Project Status
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, review_requested, closed]
+    types: [opened, reopened, synchronize, closed, review_requested]
 
 jobs:
   update-project:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Update Project Status
-        uses: actions/github-script@v7
+      - name: Update Personal Project Board
+        uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN_FINE }}
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           script: |
+            // ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ID ВАШЕГО ПРОЕКТА
+            const projectId = "PVT_kwHODlAJvM4BHrKr"; 
+            
+            const fieldName = "Статус";
             const pr = context.payload.pull_request;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
-            const PROJECT_NUMBER = 1; // Update if needed
-            const STATUS_FIELD_NAME = "Status";
-
-            async function getProjectId() {
-              const query = `query($org: String!, $number: Int!) {
-                organization(login: $org) {
-                  projectV2(number: $number) {
-                    id
-                  }
-                }
-              }`;
-              const res = await github.graphql(query, { org: owner, number: PROJECT_NUMBER });
-              return res.organization.projectV2.id;
+            
+            if (!pr) {
+              console.log("❌ Это событие не связано с pull request.");
+              return;
             }
 
-            async function getFieldId(projectId) {
-              const query = `query($projectId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    fields(first: 20) {
-                      nodes {
-                        id
-                        name
+            // Определяем статус
+            let fieldValue = null;
+            const action = context.payload.action;
+            const merged = pr.merged;
+            const hasReviewers = pr.requested_reviewers?.length > 0;
+
+            if (action === "opened" || action === "reopened" || action === "synchronize") {
+              fieldValue = "В процессе";
+            } else if (action === "review_requested" || hasReviewers) {
+              fieldValue = "На рассмотрении";
+            } else if (action === "closed" && merged) {
+              fieldValue = "Готово";
+            } else if (action === "closed" && !merged) {
+              fieldValue = "В работе";
+            }
+
+            if (!fieldValue) {
+              console.log("ℹ️ Ничего не меняем — событие не требует обновления проекта.");
+              return;
+            }
+
+            try {
+              // Проверяем доступ к проекту
+              const projectQuery = `
+                query ($projectId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      id
+                      title
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2Field {
+                            id
+                            name
+                          }
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
                       }
                     }
                   }
                 }
-              }`;
-              const res = await github.graphql(query, { projectId });
-              const field = res.node.fields.nodes.find(f => f.name === STATUS_FIELD_NAME);
-              return field?.id || null;
-            }
+              `;
 
-            async function addOrUpdateItem(projectId, itemId) {
-              const mutation = `mutation($projectId: ID!, $itemId: ID!) {
-                addProjectV2ItemById(input: {projectId: $projectId, contentId: $itemId}) {
-                  item { id }
+              const projectResult = await github.graphql(projectQuery, { projectId });
+              
+              if (!projectResult.node) {
+                throw new Error(`Проект с ID ${projectId} не найден`);
+              }
+
+              console.log(`✅ Найден проект: ${projectResult.node.title}`);
+
+              const fields = projectResult.node.fields.nodes;
+              const statusField = fields.find(f => f.name === fieldName);
+              
+              if (!statusField) {
+                const availableFields = fields.map(f => f.name).join(', ');
+                console.log(`Доступные поля: ${availableFields}`);
+                throw new Error(`Поле "${fieldName}" не найдено в проекте`);
+              }
+
+              const statusOption = statusField.options.find(o => o.name === fieldValue);
+              if (!statusOption) {
+                const availableOptions = statusField.options.map(o => o.name).join(', ');
+                console.log(`Доступные опции: ${availableOptions}`);
+                throw new Error(`Опция "${fieldValue}" не найдена`);
+              }
+
+              // Добавляем PR в проект
+              console.log(`Добавляем PR в проект...`);
+              const addItemResult = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }) {
+                    item { id }
+                  }
                 }
-              }`;
-              await github.graphql(mutation, { projectId, itemId });
-            }
+              `, {
+                projectId,
+                contentId: pr.node_id
+              });
 
-            function determineStatus(pr) {
-              if (pr.merged) return "Done";
-              if (pr.state === "closed") return "Todo";
-              if (pr.requested_reviewers?.length > 0) return "In review";
-              return "In progress";
-            }
+              const itemId = addItemResult.addProjectV2ItemById.item.id;
+              console.log(`✅ PR добавлен в проект, item ID: ${itemId}`);
 
-            async function run() {
-              const projectId = await getProjectId();
-              const fieldId = await getFieldId(projectId);
-              const status = determineStatus(pr);
-
-              console.log(`Status → ${status}`);
-
-              await addOrUpdateItem(projectId, pr.node_id);
-
-              const options = {
-                "Todo": "OPTION_ID_TODO",
-                "In progress": "OPTION_ID_IN_PROGRESS",
-                "In review": "OPTION_ID_IN_REVIEW",
-                "Done": "OPTION_ID_DONE"
-              };
-
-              const updateMutation = `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                updateProjectV2ItemFieldValue(
-                  input: {
+              // Обновляем статус
+              await github.graphql(`
+                mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
                     projectId: $projectId,
                     itemId: $itemId,
                     fieldId: $fieldId,
                     value: { singleSelectOptionId: $optionId }
+                  }) {
+                    projectV2Item { id }
                   }
-                ) { clientMutationId }
-              }`;
-
-              await github.graphql(updateMutation, {
+                }
+              `, {
                 projectId,
-                itemId: pr.node_id,
-                fieldId,
-                optionId: options[status]
+                itemId,
+                fieldId: statusField.id,
+                optionId: statusOption.id
               });
-            }
 
-            run();
+              console.log(`✅ Статус обновлён → "${fieldValue}"`);
+
+            } catch (error) {
+              console.error("❌ Ошибка:", error.message);
+              
+              // Если проект не найден, покажем доступные проекты
+              if (error.message.includes("не найден")) {
+                console.log("🔄 Получаем список доступных проектов...");
+                const projectsQuery = `
+                  query($user: String!) {
+                    user(login: $user) {
+                      projectsV2(first: 10) {
+                        nodes {
+                          id
+                          title
+                          number
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                try {
+                  const projectsResult = await github.graphql(projectsQuery, {
+                    user: context.repo.owner
+                  });
+                  
+                  console.log("=== ВАШИ ПРОЕКТЫ ===");
+                  projectsResult.user.projectsV2.nodes.forEach(project => {
+                    console.log(`Название: ${project.title}, ID: ${project.id}`);
+                  });
+                } catch (debugError) {
+                  console.error("Ошибка при получении списка проектов:", debugError.message);
+                }
+              }
+            }
