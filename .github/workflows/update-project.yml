@@ -8,212 +8,226 @@ jobs:
   update-project:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup GitHub CLI
-        uses: actions/setup-go@v4
+      - name: Update Project with GitHub Script
+        uses: actions/github-script@v7
         with:
-          go-version: '1.20'
-      
-      - name: Install GitHub CLI
-        run: |
-          # Устанавливаем GitHub CLI
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          script: |
+            const projectOwner = "virusneo1997-del";
+            const projectNumber = 1;
+            
+            console.log("🔍 Начинаем обновление проекта...");
+            console.log(`📝 PR действие: ${context.payload.action}`);
+            console.log(`🔢 Номер PR: ${context.payload.pull_request.number}`);
 
-      - name: Move PR in User Project
-        env:
-          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-        run: |
-          echo "🔍 Начинаем обновление проекта..."
-
-          # Используем GitHub CLI для GraphQL запроса
-          PROJECT_OWNER="virusneo1997-del"
-          PROJECT_NUMBER=1
-
-          # 1. Получаем информацию о проекте
-          echo "📋 Получаем информацию о проекте..."
-          PROJECT_QUERY='
-          query($owner: String!, $number: Int!) {
-            user(login: $owner) {
-              projectV2(number: $number) {
-                id
-                title
-                fields(first: 20) {
-                  nodes {
-                    ... on ProjectV2Field {
+            try {
+              // 1. Получаем информацию о проекте
+              console.log("📋 Получаем информацию о проекте...");
+              const projectQuery = `
+                query($owner: String!, $number: Int!) {
+                  user(login: $owner) {
+                    projectV2(number: $number) {
                       id
-                      name
-                    }
-                    ... on ProjectV2SingleSelectField {
-                      options {
-                        id
-                        name
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-          '
-
-          PROJECT_RESULT=$(gh api graphql -f query="$PROJECT_QUERY" -f owner="$PROJECT_OWNER" -f number="$PROJECT_NUMBER" || echo "ERROR")
-
-          if [ "$PROJECT_RESULT" = "ERROR" ]; then
-            echo "❌ Не удалось получить информацию о проекте"
-            echo "Проверьте:"
-            echo "- PROJECT_OWNER: $PROJECT_OWNER"
-            echo "- PROJECT_NUMBER: $PROJECT_NUMBER" 
-            echo "- Правильность PERSONAL_ACCESS_TOKEN"
-            exit 1
-          fi
-
-          # Извлекаем ID проекта из JSON ответа
-          PROJECT_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.id // empty')
-          
-          if [ -z "$PROJECT_ID" ]; then
-            echo "❌ Не удалось получить ID проекта"
-            echo "Ответ API:"
-            echo "$PROJECT_RESULT"
-            exit 1
-          fi
-
-          echo "✅ Проект найден, ID: $PROJECT_ID"
-
-          # 2. Добавляем PR в проект
-          echo "➕ Добавляем PR в проект..."
-          PR_NODE_ID="${{ github.event.pull_request.node_id }}"
-
-          ADD_ITEM_MUTATION='
-          mutation($projectId: ID!, $contentId: ID!) {
-            addProjectV2ItemById(input: {
-              projectId: $projectId,
-              contentId: $contentId
-            }) {
-              item {
-                id
-              }
-            }
-          }
-          '
-
-          ADD_RESULT=$(gh api graphql -f query="$ADD_ITEM_MUTATION" -f projectId="$PROJECT_ID" -f contentId="$PR_NODE_ID" || echo "ERROR")
-
-          if [ "$ADD_RESULT" = "ERROR" ]; then
-            echo "⚠️ Не удалось добавить PR в проект (возможно уже существует)"
-            # Продолжаем выполнение - возможно элемент уже существует
-          else
-            ITEM_ID=$(echo "$ADD_RESULT" | jq -r '.data.addProjectV2ItemById.item.id // empty')
-            if [ -n "$ITEM_ID" ]; then
-              echo "✅ PR добавлен в проект, ID элемента: $ITEM_ID"
-            fi
-          fi
-
-          # 3. Обновляем статус
-          echo "🔄 Определяем новый статус..."
-          ACTION="${{ github.event.action }}"
-          MERGED="${{ github.event.pull_request.merged }}"
-          HAS_REVIEWERS="${{ github.event.pull_request.requested_reviewers }}"
-
-          STATUS_FIELD_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .id // empty')
-          
-          if [ -z "$STATUS_FIELD_ID" ]; then
-            echo "❌ Не найдено поле 'Status' в проекте"
-            echo "Доступные поля:"
-            echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[].name'
-            exit 1
-          fi
-
-          # Определяем ID опции статуса
-          if [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; then
-            OPTION_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "In Progress" or .name == "In progress") | .id // empty')
-            STATUS_NAME="In Progress"
-          elif [ "$ACTION" = "ready_for_review" ] || [ -n "$HAS_REVIEWERS" ]; then
-            OPTION_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "In Review" or .name == "In review") | .id // empty')
-            STATUS_NAME="In Review"
-          elif [ "$MERGED" = "true" ]; then
-            OPTION_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "Done") | .id // empty')
-            STATUS_NAME="Done"
-          elif [ "$ACTION" = "closed" ] && [ "$MERGED" = "false" ]; then
-            OPTION_ID=$(echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .options[] | select(.name == "To Do" or .name == "To do") | .id // empty')
-            STATUS_NAME="To Do"
-          else
-            echo "ℹ️ Нет изменения статуса, пропускаем обновление"
-            exit 0
-          fi
-
-          if [ -z "$OPTION_ID" ]; then
-            echo "❌ Не найдена опция статуса '$STATUS_NAME'"
-            echo "Доступные опции:"
-            echo "$PROJECT_RESULT" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .options[].name'
-            exit 1
-          fi
-
-          echo "📌 Устанавливаем статус: $STATUS_NAME"
-
-          # Если ITEM_ID не получен при добавлении, ищем существующий элемент
-          if [ -z "$ITEM_ID" ]; then
-            echo "🔍 Ищем существующий элемент PR в проекте..."
-            FIND_ITEM_QUERY='
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  items(first: 50) {
-                    nodes {
-                      id
-                      content {
-                        ... on PullRequest {
-                          number
+                      title
+                      fields(first: 20) {
+                        nodes {
+                          ... on ProjectV2Field {
+                            id
+                            name
+                          }
+                          ... on ProjectV2SingleSelectField {
+                            options {
+                              id
+                              name
+                            }
+                          }
                         }
                       }
                     }
                   }
                 }
+              `;
+
+              const projectResult = await github.graphql(projectQuery, {
+                owner: projectOwner,
+                number: projectNumber
+              });
+
+              const project = projectResult.user.projectV2;
+
+              if (!project) {
+                throw new Error(`Проект не найден. Owner: ${projectOwner}, Number: ${projectNumber}`);
               }
-            }
-            '
 
-            ITEMS_RESULT=$(gh api graphql -f query="$FIND_ITEM_QUERY" -f projectId="$PROJECT_ID")
-            PR_NUMBER="${{ github.event.pull_request.number }}"
-            
-            ITEM_ID=$(echo "$ITEMS_RESULT" | jq -r ".data.node.items.nodes[] | select(.content.number == $PR_NUMBER) | .id // empty")
-            
-            if [ -z "$ITEM_ID" ]; then
-              echo "❌ Не удалось найти PR в проекте"
-              exit 1
-            fi
-            echo "✅ Найден существующий элемент, ID: $ITEM_ID"
-          fi
+              console.log(`✅ Проект найден: ${project.title}`);
+              console.log(`🆔 ID проекта: ${project.id}`);
 
-          # Обновляем статус
-          UPDATE_MUTATION='
-          mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-            updateProjectV2ItemFieldValue(input: {
-              projectId: $projectId,
-              itemId: $itemId,
-              fieldId: $fieldId,
-              value: { singleSelectOptionId: $optionId }
-            }) {
-              projectV2Item {
-                id
+              const projectId = project.id;
+
+              // 2. Находим поле Status
+              const statusField = project.fields.nodes.find(f => f.name === "Status");
+              
+              if (!statusField) {
+                const availableFields = project.fields.nodes.map(f => f.name).join(', ');
+                throw new Error(`Поле 'Status' не найдено. Доступные поля: ${availableFields}`);
               }
+
+              console.log(`✅ Поле 'Status' найдено, ID: ${statusField.id}`);
+
+              // 3. Находим опции статусов
+              const statusOptions = {
+                todo: statusField.options.find(o => o.name === "To Do" || o.name === "To do")?.id,
+                inProgress: statusField.options.find(o => o.name === "In Progress" || o.name === "In progress")?.id,
+                inReview: statusField.options.find(o => o.name === "In Review" || o.name === "In review")?.id,
+                done: statusField.options.find(o => o.name === "Done")?.id
+              };
+
+              console.log("📊 Найденные опции статусов:", statusOptions);
+
+              // 4. Определяем новый статус
+              const action = context.payload.action;
+              const isMerged = context.payload.pull_request.merged;
+              const hasReviewers = context.payload.pull_request.requested_reviewers?.length > 0;
+              const prNodeId = context.payload.pull_request.node_id;
+              const prNumber = context.payload.pull_request.number;
+
+              let newStatusId = null;
+              let statusName = "";
+
+              if (action === "opened" || action === "reopened") {
+                newStatusId = statusOptions.inProgress;
+                statusName = "In Progress";
+              } else if (action === "ready_for_review" || hasReviewers) {
+                newStatusId = statusOptions.inReview;
+                statusName = "In Review";
+              } else if (isMerged) {
+                newStatusId = statusOptions.done;
+                statusName = "Done";
+              } else if (action === "closed" && !isMerged) {
+                newStatusId = statusOptions.todo;
+                statusName = "To Do";
+              }
+
+              if (!newStatusId) {
+                console.log("ℹ️ Нет изменения статуса, пропускаем обновление");
+                return;
+              }
+
+              console.log(`📌 Устанавливаем статус: ${statusName}`);
+
+              // 5. Ищем существующий элемент PR в проекте
+              console.log("🔍 Ищем PR в проекте...");
+              const findItemQuery = `
+                query($projectId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      items(first: 50) {
+                        nodes {
+                          id
+                          content {
+                            ... on PullRequest {
+                              id
+                              number
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+
+              const itemsResult = await github.graphql(findItemQuery, { projectId });
+              const items = itemsResult.node.items.nodes;
+              
+              const existingItem = items.find(item => 
+                item.content?.number === prNumber || item.content?.id === prNodeId
+              );
+
+              let itemId;
+
+              if (existingItem) {
+                itemId = existingItem.id;
+                console.log(`✅ PR уже в проекте, ID элемента: ${itemId}`);
+              } else {
+                // 6. Добавляем PR в проект
+                console.log("➕ Добавляем PR в проект...");
+                try {
+                  const addItemResult = await github.graphql(`
+                    mutation($projectId: ID!, $contentId: ID!) {
+                      addProjectV2ItemById(input: {
+                        projectId: $projectId,
+                        contentId: $contentId
+                      }) {
+                        item {
+                          id
+                        }
+                      }
+                    }
+                  `, {
+                    projectId,
+                    contentId: prNodeId
+                  });
+
+                  itemId = addItemResult.addProjectV2ItemById.item.id;
+                  console.log(`✅ PR добавлен в проект, ID элемента: ${itemId}`);
+                } catch (addError) {
+                  if (addError.message.includes("already exists")) {
+                    console.log("ℹ️ PR уже существует в проекте, ищем снова...");
+                    // Пытаемся найти элемент снова
+                    const retryItems = await github.graphql(findItemQuery, { projectId });
+                    const retryItem = retryItems.node.items.nodes.find(item => 
+                      item.content?.number === prNumber || item.content?.id === prNodeId
+                    );
+                    if (retryItem) {
+                      itemId = retryItem.id;
+                      console.log(`✅ Найден существующий элемент, ID: ${itemId}`);
+                    } else {
+                      throw new Error("Не удалось добавить или найти PR в проекте");
+                    }
+                  } else {
+                    throw addError;
+                  }
+                }
+              }
+
+              // 7. Обновляем статус
+              console.log("🔄 Обновляем статус...");
+              await github.graphql(`
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: { singleSelectOptionId: $value }
+                  }) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `, {
+                projectId,
+                itemId,
+                fieldId: statusField.id,
+                value: newStatusId
+              });
+
+              console.log(`✅ Статус проекта успешно обновлен на '${statusName}'!`);
+
+            } catch (error) {
+              console.error("❌ Критическая ошибка:", error.message);
+              
+              if (error.message.includes("NOT_FOUND")) {
+                console.log("🔍 Проект не найден. Проверь:");
+                console.log("- Существует ли проект с номером", projectNumber);
+                console.log("- Доступен ли он для пользователя", projectOwner);
+              } else if (error.message.includes("Resource not accessible")) {
+                console.log("🔐 Ошибка доступа. Проверьте:");
+                console.log("- Правильность PERSONAL_ACCESS_TOKEN");
+                console.log("- Права токена (repo, project, write:project)");
+              }
+              
+              // Не выбрасываем ошибку дальше, чтобы workflow не падал
+              console.log("⚠️ Продолжаем выполнение других workflow...");
             }
-          }
-          '
-
-          UPDATE_RESULT=$(gh api graphql -f query="$UPDATE_MUTATION" \
-            -f projectId="$PROJECT_ID" \
-            -f itemId="$ITEM_ID" \
-            -f fieldId="$STATUS_FIELD_ID" \
-            -f optionId="$OPTION_ID")
-
-          if [ $? -eq 0 ]; then
-            echo "✅ Статус проекта успешно обновлен на '$STATUS_NAME'!"
-          else
-            echo "❌ Ошибка при обновлении статуса"
-            exit 1
-          fi
