@@ -1,0 +1,267 @@
+name: Complete Student Workflow with Python Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed, review_requested]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-and-test:
+    runs-on: ubuntu-latest
+    outputs:
+      lesson_valid: ${{ steps.validate-structure.outputs.lesson_valid }}
+      lesson_name: ${{ steps.find-lesson.outputs.lesson_name }}
+      python_tests_passed: ${{ steps.run-python-tests.outputs.passed }}
+      tests_output: ${{ steps.run-python-tests.outputs.tests_output }}
+    steps:
+      - name: Checkout student code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0  # Важно для git diff
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Find lesson folder
+        id: find-lesson
+        run: |
+          echo "🔍 Ищем папку урока..."
+          lesson=$(find . -path "./lessons/[0-9]*-*" -type d | head -1)
+          if [ -n "$lesson" ]; then
+            lesson_name=$(basename "$lesson")
+            echo "✅ Найдена папка: $lesson_name"
+            echo "lesson_name=$lesson_name" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Папка урока не найдена"
+            echo "lesson_name=not_found" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate lesson structure
+        id: validate-structure
+        run: |
+          lesson_name="${{ steps.find-lesson.outputs.lesson_name }}"
+          
+          if [ "$lesson_name" = "not_found" ]; then
+            echo "❌ Ошибка: папка урока не найдена"
+            echo "lesson_valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          lesson_path="./lessons/$lesson_name"
+          
+          # Проверяем наличие student-report.md
+          if [ ! -f "$lesson_path/student-report.md" ]; then
+            echo "❌ Ошибка: нет student-report.md в $lesson_path"
+            echo "lesson_valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Проверяем что файл не пустой
+          if [ ! -s "$lesson_path/student-report.md" ]; then
+            echo "❌ Ошибка: student-report.md пустой"
+            echo "lesson_valid=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "✅ Структура урока правильная"
+          echo "lesson_valid=true" >> $GITHUB_OUTPUT
+
+      - name: Run Python tests for changed lessons
+        id: run-python-tests
+        run: |
+          echo "🐍 Запускаем Python тесты для измененных уроков..."
+          
+          # Получаем SHA коммитов для сравнения
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          
+          echo "📊 Сравниваем коммиты: $base_sha..$head_sha"
+          
+          # Запускаем твой скрипт для тестирования измененных уроков
+          if python scripts/run_lesson_tests.py "$base_sha" "$head_sha"; then
+            echo "✅ Все Python тесты пройдены"
+            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "tests_output=success" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Python тесты не пройдены"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            echo "tests_output=failed" >> $GITHUB_OUTPUT
+          fi
+
+  update-project-status:
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Project Board based on test results
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          script: |
+            const projectId = "PVT_kwHODlAJvM4BHrKr";
+            
+            // Получаем результаты всех проверок
+            const structureValid = "${{ needs.validate-and-test.outputs.lesson_valid }}" === "true";
+            const pythonTestsPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}" === "true";
+            const testsOutput = "${{ needs.validate-and-test.outputs.tests_output }}";
+            
+            let status = "В процессе";
+            const prAction = context.payload.action;
+            const isMerged = context.payload.pull_request?.merged;
+            
+            console.log(`📊 Результаты проверок: структура=${structureValid}, тесты=${pythonTestsPassed}, вывод=${testsOutput}`);
+            
+            // Логика определения статуса на основе ВСЕХ проверок
+            if (prAction === "closed" && isMerged) {
+              if (structureValid && pythonTestsPassed) {
+                status = "Готово";
+              } else {
+                status = "Требует исправлений";
+              }
+            } else if (prAction === "review_requested") {
+              status = "На проверке";
+            } else if (prAction === "opened" || prAction === "reopened") {
+              if (structureValid && pythonTestsPassed) {
+                status = "В процессе";
+              } else if (!structureValid) {
+                status = "Требует исправлений";
+              } else if (structureValid && !pythonTestsPassed) {
+                status = "Тесты не пройдены";
+              }
+            }
+
+            console.log(`🔄 Устанавливаем статус: ${status}`);
+
+            try {
+              // Добавляем PR в проект
+              const addResult = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }) {
+                    item { id }
+                  }
+                }
+              `, {
+                projectId,
+                contentId: context.payload.pull_request.node_id
+              });
+
+              const itemId = addResult.addProjectV2ItemById.item.id;
+
+              // Получаем поля проекта
+              const projectData = await github.graphql(`
+                query($projectId: ID!) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      fields(first: 10) {
+                        nodes {
+                          ... on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `, { projectId });
+
+              const statusField = projectData.node.fields.nodes.find(f => f.name === "Статус");
+              
+              if (!statusField) {
+                console.log("❌ Поле 'Статус' не найдено в проекте");
+                return;
+              }
+
+              const statusOption = statusField.options.find(o => o.name === status);
+              
+              if (!statusOption) {
+                console.log(`❌ Опция '${status}' не найдена. Доступные: ${statusField.options.map(o => o.name).join(', ')}`);
+                return;
+              }
+
+              // Обновляем статус
+              await github.graphql(`
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: { singleSelectOptionId: $optionId }
+                  }) {
+                    projectV2Item { id }
+                  }
+                }
+              `, {
+                projectId,
+                itemId,
+                fieldId: statusField.id,
+                optionId: statusOption.id
+              });
+
+              console.log(`✅ Project Board обновлен: ${status}`);
+
+            } catch (error) {
+              console.log("⚠️ Не удалось обновить Project Board:", error.message);
+            }
+
+  post-detailed-results:
+    needs: [validate-and-test, update-project-status]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post detailed test results to PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const isValid = "${{ needs.validate-and-test.outputs.lesson_valid }}" === "true";
+            const pythonPassed = "${{ needs.validate-and-test.outputs.python_tests_passed }}" === "true";
+            const lessonName = "${{ needs.validate-and-test.outputs.lesson_name }}";
+            
+            let comment = "## 📋 Детальные результаты проверки\\n\\n";
+            
+            if (isValid && pythonPassed) {
+              comment += "🎉 **ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ!**\\n";
+              comment += `📁 Папка урока: ${lessonName}\\n`;
+              comment += "✅ Структура урока корректна\\n";
+              comment += "✅ Python тесты пройдены\\n";
+              comment += "🚀 Задание готово к ревью!";
+            } else if (isValid && !pythonPassed) {
+              comment += "⚠️ **СТРУКТУРА OK, НО ТЕСТЫ НЕ ПРОЙДЕНЫ**\\n";
+              comment += `📁 Папка урока: ${lessonName}\\n`;
+              comment += "✅ Структура урока корректна\\n";
+              comment += "❌ Python тесты не пройдены\\n";
+              comment += "🔧 Проверьте вывод тестов выше и исправьте код";
+            } else if (!isValid) {
+              comment += "❌ **ПРОБЛЕМЫ СО СТРУКТУРОЙ**\\n";
+              comment += "• Папка урока не найдена ИЛИ\\n";
+              comment += "• student-report.md отсутствует ИЛИ\\n";
+              comment += "• student-report.md пустой\\n";
+              comment += "🔧 Исправьте структуру и обновите PR";
+            }
+            
+            comment += "\\n\\n---\\n*Автоматическая проверка College Linux Course*";
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: comment
+            });
