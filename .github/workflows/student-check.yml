@@ -3,6 +3,11 @@ name: Проверка задания студента
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
+name: Проверка задания студента
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -27,38 +32,51 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
 
-      ###################################
-      #  Основная Автопроверка (Вариант А)
-      ###################################
-
       - name: Определяем урок из пути
         id: lesson
         run: |
-          # Ищем номер урока по имени папки в PR
-          ls -R .
-          lesson=$(find . -maxdepth 2 -type d -name "lesson-*" | head -n 1)
-
-          if [ -z "$lesson" ]; then
-            echo "lesson=none" >> $GITHUB_OUTPUT
+          echo "=== Поиск папок уроков в lessons/ ==="
+          
+          # Ищем папки с номерами (01-, 02-, и т.д.)
+          if [ -d "lessons" ]; then
+            echo "Папка lessons существует"
+            find lessons -maxdepth 1 -type d -name "[0-9]*-*" | sort || echo "Папки уроков не найдены"
+            
+            lesson=$(find lessons -maxdepth 1 -type d -name "[0-9]*-*" | head -n 1)
+            
+            if [ -z "$lesson" ]; then
+              echo "❌ Папка урока не найдена в lessons/"
+              echo "Содержимое папки lessons:"
+              ls -la lessons/
+              echo "lesson=not_found" >> $GITHUB_OUTPUT
+            else
+              lesson_name=$(basename "$lesson")
+              echo "✅ Найдена папка урока: $lesson_name"
+              echo "lesson=$lesson_name" >> $GITHUB_OUTPUT
+              echo "full_path=$lesson" >> $GITHUB_OUTPUT
+            fi
           else
-            lesson_name=$(basename "$lesson")
-            echo "lesson=$lesson_name" >> $GITHUB_OUTPUT
+            echo "❌ Папка lessons не существует"
+            echo "lesson=not_found" >> $GITHUB_OUTPUT
           fi
 
       - name: Проверяем структуру
         run: |
-          if [ "${{ steps.lesson.outputs.lesson }}" = "none" ]; then
-            echo "::error ::Не найдена папка урока (например, lesson-01)."
+          if [ "${{ steps.lesson.outputs.lesson }}" = "not_found" ]; then
+            echo "::error ::Не найдена папка урока в папке lessons."
+            echo "Доступные папки: 01-initial-setup, 02-users-permissions, 03-web-server, и т.д."
             exit 1
           fi
 
           echo "Найден урок: ${{ steps.lesson.outputs.lesson }}"
+          echo "Полный путь: ${{ steps.lesson.outputs.full_path }}"
 
-          lesson_dir="${{ steps.lesson.outputs.lesson }}"
+          lesson_dir="${{ steps.lesson.outputs.full_path }}"
 
           # Проверяем наличие результата
           if [ ! -f "$lesson_dir/student-report.md" ]; then
-            echo "::error ::В папке урока нет файла student-report.md"
+            echo "::error ::В папке урока $lesson_dir нет файла student-report.md"
+            echo "Создайте файл student-report.md в папке $lesson_dir"
             exit 1
           fi
 
@@ -66,20 +84,34 @@ jobs:
 
       - name: Проверяем содержимое student-report.md
         run: |
-          file="${{ steps.lesson.outputs.lesson }}/student-report.md"
+          file="${{ steps.lesson.outputs.full_path }}/student-report.md"
 
-          echo "---- Содержимое ----"
-          cat "$file"
-          echo "--------------------"
+          echo "---- Содержимое student-report.md ----"
+          cat "$file" || echo "Файл не читается"
+          echo "--------------------------------------"
 
-          if ! grep -qi "ответ" "$file"; then
-            echo "::warning ::Файл есть, но возможно пустой или без описания решения."
+          # Проверяем что файл не пустой
+          if [ ! -s "$file" ]; then
+            echo "::error ::Файл student-report.md пустой"
+            exit 1
+          fi
+
+          # Проверяем наличие контента
+          if ! grep -qi -E "ответ|solution|решение|отчет|report|задание|task" "$file"; then
+            echo "::warning ::Файл есть, но возможно без описания решения."
+          else
+            echo "✅ Файл содержит контент"
           fi
 
       - name: Успешная валидация
         if: success()
-        run: echo "Автопроверка успешно завершена ✔ Студент молодец!"
+        run: |
+          echo "🎉 Автопроверка успешно завершена!"
+          echo "✅ Структура урока: ${{ steps.lesson.outputs.lesson }}"
+          echo "✅ Файл student-report.md найден и не пустой"
 
       - name: Неуспешная валидация
         if: failure()
-        run: echo "Автопроверка завершилась ошибкой ❌ Проверьте замечания выше."
+        run: |
+          echo "❌ Автопроверка завершилась ошибкой"
+          echo "Проверьте замечания выше и исправьте структуру"
