@@ -1,30 +1,38 @@
-name: Auto Project Board Workflow
+name: Auto Project Board
 
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, review_requested, closed]
 
 jobs:
-  manage-project:
+  update-project:
     runs-on: ubuntu-latest
 
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: write
+
     steps:
-      - name: Manage project card
+      - name: Update Project V2
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PROJECT_ACCESS_TOKEN_FINE }}
           script: |
-            const projectId = "PVT_kwHODlAJvM4BHrKr"; // ID Project V2
-            const fieldName = "Status"; // Exact name of the Status field
+            const projectId = "PVT_kwHODlAJvM4BHrKr";
+            const fieldName = "Status";
 
             const pr = context.payload.pull_request;
-            if (!pr) throw new Error("❌ This event is not a pull request.");
+            if (!pr) {
+              console.log("Not a PR event.");
+              return;
+            }
 
             const action = context.payload.action;
             const merged = pr.merged;
-            const hasReviewers = pr.requested_reviewers?.length > 0;
+            const reviewers = pr.requested_reviewers || [];
+            const hasReviewers = reviewers.length > 0;
 
-            // Determine the column based on PR state
             let fieldValue = null;
 
             if (action === "opened" || action === "reopened" || action === "synchronize") {
@@ -38,21 +46,17 @@ jobs:
             }
 
             if (!fieldValue) {
-              console.log("ℹ️ No update required.");
+              console.log("Nothing to update");
               return;
             }
 
-            // Fetch project fields
+            // Fetch fields
             const query = `
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
-                    fields(first: 50) {
+                    fields(first: 20) {
                       nodes {
-                        ... on ProjectV2FieldCommon {
-                          id
-                          name
-                        }
                         ... on ProjectV2SingleSelectField {
                           id
                           name
@@ -63,37 +67,57 @@ jobs:
                         }
                       }
                     }
+                    items(first: 50) {
+                      nodes {
+                        id
+                        content {
+                          ... on PullRequest {
+                            id
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
             `;
-            const result = await github.graphql(query, { projectId });
-            const fields = result.node.fields.nodes;
+
+            const projectData = await github.graphql(query, { projectId });
+            const fields = projectData.node.fields.nodes;
 
             const statusField = fields.find(f => f.name === fieldName);
-            if (!statusField) throw new Error(`❌ Field "${fieldName}" not found.`);
+            if (!statusField) throw new Error(`Field "${fieldName}" not found`);
 
             const statusOption = statusField.options.find(o => o.name === fieldValue);
-            if (!statusOption) throw new Error(`❌ Option "${fieldValue}" not found.`);
+            if (!statusOption) throw new Error(`Option "${fieldValue}" not found`);
 
-            // Add item to project if not exists
-            const addItem = await github.graphql(`
-              mutation($projectId: ID!, $contentId: ID!) {
-                addProjectV2ItemById(input: {
-                  projectId: $projectId,
-                  contentId: $contentId
-                }) {
-                  item { id }
+            // Check if PR already in project
+            const existingItem = projectData.node.items.nodes.find(i => i.content?.id === pr.node_id);
+
+            let itemId = null;
+
+            if (existingItem) {
+              itemId = existingItem.id;
+            } else {
+              // Add PR to project
+              const addItem = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input:{
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }) {
+                    item { id }
+                  }
                 }
-              }
-            `, {
-              projectId,
-              contentId: pr.node_id
-            });
+              `, {
+                projectId,
+                contentId: pr.node_id
+              });
 
-            const itemId = addItem.addProjectV2ItemById.item.id;
+              itemId = addItem.addProjectV2ItemById.item.id;
+            }
 
-            // Update Status field
+            // Update status
             await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
@@ -112,35 +136,4 @@ jobs:
               optionId: statusOption.id
             });
 
-            console.log(`✅ Updated PR → "${fieldValue}"`);
-
-      - name: Comment on PR
-        if: ${{ github.event.action != 'synchronize' }}
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const pr = context.payload.pull_request;
-            const action = context.payload.action;
-            const merged = pr.merged;
-
-            let message = null;
-
-            if (action === "opened" || action === "reopened") {
-              message = "🚀 Pull Request added to project → **In Progress**.";
-            } else if (action === "review_requested") {
-              message = "🧩 Review requested → moved to **In review**.";
-            } else if (action === "closed" && merged) {
-              message = "🎉 PR merged → moved to **Done**!";
-            } else if (action === "closed" && !merged) {
-              message = "⚙️ PR closed without merge → moved to **To do**.";
-            }
-
-            if (message) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pr.number,
-                body: message
-              });
-            }
+            console.log(`Updated PR → ${fieldValue}`);
